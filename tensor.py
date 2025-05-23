@@ -19,16 +19,22 @@ def complex_l2_loss(x,y):
     return jnp.real((x-y).conj() * (x-y))
 
 def residual_function(T):
-    def rs(dec,unused):
+    def rs(dec):
         S = jnp.einsum('il,jl,kl->ijk', *dec)
         return S-T
     return rs
 
-numit = 10000
+numit = 1000
 cx = False
 m,n,l,r = 2,2,2,7
 batch = 10000
 
+cl_bound = 2
+def clipped(x):
+    if cx:
+        return jnp.clip(jnp.real(x),min=-cl_bound,max=cl_bound) + jnp.clip(jnp.imag(x),min=-cl_bound,max=cl_bound) * 1j
+    else:
+        return jnp.clip(x,min=-cl_bound,max=cl_bound)
 def loss_function(T):
     rs = residual_function(T)
     def l2_squared(x):
@@ -37,8 +43,11 @@ def loss_function(T):
         else:
             return jnp.sum(x * x)
     def loss_fn(dec,it,rng):
-        r = rs(dec,None)
+        r = rs(dec)
         loss = l2_squared(r)
+        for f in dec:
+            loss += 0.01 * jnp.sum(jnp.abs(f - jnp.round(f*2)/2))
+            loss += 0.5 * jnp.sum(jnp.abs(f - clipped(f)))
         return loss
     return loss_fn
 
@@ -83,20 +92,33 @@ def update_function(dec, opt_state, it, rng):
 for it in range(numit):
     rng, rngcur = jax.random.split(rng)
     dec, opt_state, loss, maxabs = update_function(dec, opt_state, it, rngcur)
-    besti = jnp.argpartition(loss,4)[:5]
-    besti = besti[jnp.argsort(loss[besti])]
-    # besti = jnp.sort(besti)
-    if it % 100 == 0:
+    if it % 1000 == 999:
+        besti = jnp.argpartition(loss,4)[:5]
+        besti = besti[jnp.argsort(loss[besti])]
+        # besti = jnp.sort(besti)
         print(it)
         print(besti)
         print(loss[besti])
         print(maxabs[besti])
         print(jnp.max(loss))
         # print(loss)
-
+        
+bestdecs = [jax.tree.map(lambda f: f[i],dec) for i in besti]
+        
 print(f'time elapsed : {time.time() - startt}')
+dec = bestdecs[0]
 
-# lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4, verbose=frozenset(['loss','step_size']))
-# rs_fn = jax.jit(residual_function(T))
-# res = optx.least_squares(rs_fn, lm, dec)
+with jax.default_device(jax.devices('cpu')[0]):
+    lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4, verbose=frozenset(['loss','step_size']))
+    rs_base = residual_function(T)
+    @jax.jit
+    def rs_fn(dec, unused):
+        rs = [rs_base(dec)]
+        for f in dec:
+            rs.append(0.1 * (f - jnp.round(f*2)/2))
+            rs.append(0.5 * (f - clipped(f)))
+        return rs
+    res = optx.least_squares(rs_fn, lm, dec)
+    dec = res.value
+    decr = jax.tree.map(lambda x: jnp.round(x*2)/2, dec)
 
