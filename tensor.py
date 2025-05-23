@@ -24,10 +24,11 @@ def residual_function(T):
         return S-T
     return rs
 
-numit = 1000
-cx = False
-m,n,l,r = 2,2,2,7
-batch = 10000
+numit = 10000
+cx = True
+m,n,l,r = 4,4,4,48
+# m,n,l,r = 4,4,4,48
+batch = 20000
 
 cl_bound = 2
 def clipped(x):
@@ -46,8 +47,9 @@ def loss_function(T):
         r = rs(dec)
         loss = l2_squared(r)
         for f in dec:
+            # loss += 0.01 * jnp.sum(jnp.abs(f - jnp.round(f)))
             loss += 0.01 * jnp.sum(jnp.abs(f - jnp.round(f*2)/2))
-            loss += 0.5 * jnp.sum(jnp.abs(f - clipped(f)))
+            loss += 0.1 * jnp.sum(jnp.abs(f - clipped(f)))
         return loss
     return loss_fn
 
@@ -103,22 +105,28 @@ for it in range(numit):
         print(jnp.max(loss))
         # print(loss)
         
-bestdecs = [jax.tree.map(lambda f: f[i],dec) for i in besti]
-        
 print(f'time elapsed : {time.time() - startt}')
-dec = bestdecs[0]
 
 with jax.default_device(jax.devices('cpu')[0]):
-    lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4, verbose=frozenset(['loss','step_size']))
-    rs_base = residual_function(T)
-    @jax.jit
-    def rs_fn(dec, unused):
-        rs = [rs_base(dec)]
-        for f in dec:
-            rs.append(0.1 * (f - jnp.round(f*2)/2))
-            rs.append(0.5 * (f - clipped(f)))
-        return rs
-    res = optx.least_squares(rs_fn, lm, dec)
-    dec = res.value
-    decr = jax.tree.map(lambda x: jnp.round(x*2)/2, dec)
+    numrefine = 5
+    decs_refined = []
+    decrs = []
+    besti = jnp.argpartition(loss,numrefine)[:numrefine]
+    for i in besti:
+        curdec = jax.tree.map(lambda f: f[i],dec)
+        lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4, verbose=frozenset(['loss','step_size']))
+        rs_base = residual_function(T)
+        @jax.jit
+        def rs_fn(dec, unused):
+            rs = [rs_base(dec)]
+            for f in dec:
+                rs.append(0.1 * (f - jnp.round(f*2)/2))
+                # rs.append(0.1 * (f - jnp.round(f)))
+                rs.append(0.5 * (f - clipped(f)))
+            return rs
+        res = optx.least_squares(rs_fn, lm, curdec)
+        curdec = res.value
+        curdecr = jax.tree.map(lambda x: jnp.round(x*2)/2, curdec)
+        decs_refined.append(curdec)
+        decrs.append(curdecr)
 
