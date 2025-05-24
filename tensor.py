@@ -5,6 +5,7 @@ import optax
 import functools
 import optimistix as optx
 import lineax as lx
+# import equinox as eqx
 from itertools import *
 
 numit = 30000
@@ -34,12 +35,13 @@ def residual_function_fp(T):
     def rs(dec):
         r = dec[0].shape[1]
         a,b,c = [f.shape[0] for f in dec]
-        A = lx.MatrixLinearOperator(jnp.einsum('jl,kl->jkl', *dec).reshape(b*c,r))
-        B = lx.MatrixLinearOperator(jnp.einsum('kl,il->kil', *dec).reshape(c*a,r))
-        C = lx.MatrixLinearOperator(jnp.einsum('il,jl->ijl', *dec).reshape(a*b,r))
-        f1 = lx.linear_solve(A, T.transpose(1,2,0).reshape(b*c,a), lx.AutoLinearSolver(well_posed=None)).T
-        f2 = lx.linear_solve(B, T.transpose(2,0,1).reshape(c*a,b), lx.AutoLinearSolver(well_posed=None)).T
-        f3 = lx.linear_solve(C, T.reshape(a*b,c), lx.AutoLinearSolver(well_posed=None)).T
+        A = lx.MatrixLinearOperator(jnp.einsum('jl,kl->jkl', dec[1],dec[2]).reshape(b*c,r))
+        B = lx.MatrixLinearOperator(jnp.einsum('kl,il->kil', dec[2],dec[0]).reshape(c*a,r))
+        C = lx.MatrixLinearOperator(jnp.einsum('il,jl->ijl', dec[0],dec[1]).reshape(a*b,r))
+        solve = jax.vmap(lambda A,B: lx.linear_solve(A, B, lx.AutoLinearSolver(well_posed=None)).value, [None,1], 1)
+        f1 = solve(A, T.transpose(1,2,0).reshape(b*c,a)).T
+        f2 = solve(B, T.transpose(2,0,1).reshape(c*a,b)).T
+        f3 = solve(C, T.transpose(0,1,2).reshape(a*b,c)).T
         return (dec[0] - f1, dec[1] - f2, dec[2] - f3)
     return rs
 
@@ -105,7 +107,7 @@ optimizer = optax.adamw(start_learning_rate)
 # optimizer = optax.lbfgs(start_learning_rate)
 opt_state = jax.vmap(optimizer.init)(dec)
 
-@jax.jit
+@functools.partial(jax.jit,donate_argnums=[0,1])
 @functools.partial(jax.vmap, in_axes=[0,0,None,None])
 def update_function(dec, opt_state, it, rng):
     loss, grads = jax.value_and_grad(loss_fn)(dec,it,rng)
@@ -134,26 +136,26 @@ for it in range(numit):
 print(f'time elapsed : {time.time() - startt}')
 startt = time.time()
 
-with jax.default_device(jax.devices('cpu')[0]):
-    numrefine = 200
-    besti = jnp.argpartition(loss,numrefine)[:numrefine]
-    decbest = jax.tree.map(lambda x: x[besti],dec)
+numrefine = min(1000,batch)
+besti = jnp.argpartition(loss,numrefine-1)[:numrefine]
+decbest = jax.tree.map(lambda x: x[besti],dec)
+@jax.jit
+# @eqx.filter_jit
+@jax.vmap
+def refine(dec):
+    # lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4,verbose=frozenset(['loss']))
+    lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4)
+    rs_base = residual_function_fp(T)
     @jax.jit
-    @jax.vmap
-    def refine(dec):
-        # lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4,verbose=frozenset(['loss']))
-        lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4)
-        rs_base = residual_function(T)
-        @jax.jit
-        def rs_fn(dec, unused):
-            rs = [rs_base(dec)]
-            # for f in dec:
-            #     rs.append(0.1 * (f - jnp.round(f*2)/2))
-            #     # rs.append(0.1 * (f - jnp.round(f)))
-            #     rs.append(0.5 * (f - clipped(f)))
-            return rs
-        return optx.least_squares(rs_fn, lm, dec).value
-    dec_refine = refine(decbest)
+    def rs_fn(dec, unused):
+        rs = [rs_base(dec)]
+        # for f in dec:
+        #     rs.append(0.1 * (f - jnp.round(f*2)/2))
+        #     # rs.append(0.1 * (f - jnp.round(f)))
+        #     rs.append(0.5 * (f - clipped(f)))
+        return rs
+    return optx.least_squares(rs_fn, lm, dec).value
+dec_refine = refine(decbest)
 basic_loss_fn = jax.jit(jax.vmap(basic_loss_function(T)),device=jax.devices('cpu')[0])
 print( basic_loss_fn(dec_refine) )
 print(f'time elapsed : {time.time() - startt}')
