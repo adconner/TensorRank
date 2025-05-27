@@ -93,14 +93,17 @@ def loss_function(T):
     def loss_fn(dec,it,rng):
         progress = it / numit
         r,full_dec = rs(dec)
-        loss = jax.tree.reduce(jnp.add,jax.tree.map(lambda e: jnp.mean(optax.l2_loss(jnp.abs(e))), r))
+        base_loss = jax.tree.reduce(jnp.add,jax.tree.map(lambda e: jnp.mean(optax.l2_loss(jnp.abs(e))), r))
+        regularization_loss = 0
+        discretization_zero_loss = 0
         for f in full_dec:
-            loss += 0.003 * jnp.mean(jnp.abs(f))
-            loss += 0.02 * 0.1 ** (progress*4) * jnp.mean(optax.l2_loss(jnp.abs(f)))
+            regularization_loss += 0.02 * 0.1 ** (progress*4) * jnp.mean(optax.l2_loss(jnp.abs(f)))
+            discretization_zero_loss += 0.003 * jnp.mean(jnp.abs(f))
             # loss += 0.03 * ((1-jnp.cos(jnp.pi*progress))/2) * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
             # loss += 0.01 * ((1-jnp.cos(jnp.pi*progress))/2)**2 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
             # loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
-        return 1000*loss,full_dec
+        loss = base_loss + regularization_loss + discretization_zero_loss
+        return loss,(full_dec, (base_loss, regularization_loss, discretization_zero_loss))
     return loss_fn
 
 def init(rng):
@@ -136,7 +139,7 @@ opt_state = jax.vmap(optimizer.init)(dec)
 @functools.partial(jax.jit,donate_argnums=[0,1])
 @functools.partial(jax.vmap, in_axes=[0,0,None,None])
 def update_function(dec, opt_state, it, rng):
-    (loss, full_dec), grads = jax.value_and_grad(loss_fn,has_aux=True)(dec,it,rng)
+    (loss, (full_dec, losses)), grads = jax.value_and_grad(loss_fn,has_aux=True)(dec,it,rng)
     if cx:
         grads = jax.tree.map(jnp.conj, grads)
     # grads = jax.tree.map(jax.add, grads, 
@@ -145,10 +148,10 @@ def update_function(dec, opt_state, it, rng):
     # grads = jax.tree.map(lambda e: e + 0.02*jax.random.normal(rng, e.shape, e.dtype),grads)
     updates, opt_state = optimizer.update(grads, opt_state, dec, value = loss, grad = grads, value_fn = lambda x: loss_fn(x,it,rng))
     dec = optax.apply_updates(dec, updates)
-    return dec, opt_state, loss, full_dec
+    return dec, opt_state, loss, full_dec, losses
 
 @jax.jit
-def stats(opt_state, loss, full_dec):
+def stats(opt_state, loss, full_dec, losses):
     besti = jnp.argpartition(loss,4)[:5]
     besti = besti[jnp.argsort(loss[besti])]
     # besti = jnp.sort(besti)
@@ -156,23 +159,23 @@ def stats(opt_state, loss, full_dec):
     bloss = basic_loss_fn(rfd)
     maxabs = jax.vmap(lambda dec: jax.tree.reduce(jnp.maximum,jax.tree.map(lambda e: jnp.max(jnp.abs(e)), dec)))(rfd)
     worst = jnp.max(loss)
-    return besti,loss[besti],bloss,maxabs,worst
+    res = (besti,1000*loss[besti],[]) + tuple(1000*l[besti] for l in losses) + ([],bloss,maxabs,1000*worst)
+    return res
 
 # A simple update loop.
 for it in range(numit):
     if it == 1:
         startt = time.time()
     rng, rngcur = jax.random.split(rng)
-    dec, opt_state, loss, full_dec = update_function(dec, opt_state, it, rngcur)
+    dec, opt_state, loss, full_dec, losses = update_function(dec, opt_state, it, rngcur)
     if it % printevery == printevery-1:
-        besti, closs, bloss, maxabs, worst = stats(opt_state,loss,full_dec)
+        sts = stats(opt_state,loss,full_dec,losses)
         elapsed = time.time() - startt
         print(f'{it}: time elapsed {elapsed}, Kips {it*batch / (1000*elapsed) }')
-        print(besti)
-        print(loss)
-        print(bloss)
-        print(maxabs)
-        print(worst)
+        for r in sts:
+            print(r)
+    else:
+        del loss, full_dec, losses
         
 # startt = time.time()
 # numrefine=10
