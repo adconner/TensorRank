@@ -23,10 +23,10 @@ import time
 numit = 10000
 batch = 10000
 printevery = 100
-cx = False
+cx = True
 # m,n,l,r = 2,2,2,7
-m,n,l,r = 3,3,3,23
-# m,n,l,r = 4,4,4,48
+# m,n,l,r = 3,3,3,23
+m,n,l,r = 4,4,4,48
 
 def matrixmult(m,n,l):
     T=np.zeros((m*n,n*l,l*m))
@@ -94,16 +94,20 @@ def loss_function(T):
         progress = it / numit
         r,full_dec = rs(dec)
         base_loss = jax.tree.reduce(jnp.add,jax.tree.map(lambda e: jnp.mean(optax.l2_loss(jnp.abs(e))), r))
-        regularization_loss = 0
-        discretization_zero_loss = 0
+        regularization_loss = 0.0
+        discretization_zero_loss = 0.0
         for f in full_dec:
-            regularization_loss += 0.02 * 0.1 ** (progress*4) * jnp.mean(optax.l2_loss(jnp.abs(f)))
-            discretization_zero_loss += 0.003 * jnp.mean(jnp.abs(f))
+            regularization_loss += 0.02 * jnp.where(progress < 1/2, 0.1 ** (progress*4), 0) * jnp.mean(optax.l2_loss(jnp.abs(f)))
+            # regularization_loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
+            # discretization_zero_loss += 0.003 * jnp.mean(jnp.abs(f))
+            # discretization_zero_loss += 0.003 * jnp.mean(jnp.abs(f - jnp.round(f)))
             # loss += 0.03 * ((1-jnp.cos(jnp.pi*progress))/2) * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
             # loss += 0.01 * ((1-jnp.cos(jnp.pi*progress))/2)**2 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
             # loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
         loss = base_loss + regularization_loss + discretization_zero_loss
-        return loss,(full_dec, (base_loss, regularization_loss, discretization_zero_loss))
+        return loss,(full_dec, { (0,'base_loss') : base_loss, 
+                                (1,'regularization_loss') : regularization_loss, 
+                                (2,'discretization_zero_loss') : discretization_zero_loss })
     return loss_fn
 
 def init(rng):
@@ -159,7 +163,13 @@ def stats(opt_state, loss, full_dec, losses):
     bloss = basic_loss_fn(rfd)
     maxabs = jax.vmap(lambda dec: jax.tree.reduce(jnp.maximum,jax.tree.map(lambda e: jnp.max(jnp.abs(e)), dec)))(rfd)
     worst = jnp.max(loss)
-    res = (besti,1000*loss[besti],[]) + tuple(1000*l[besti] for l in losses) + ([],bloss,maxabs,1000*worst)
+    res = { (0, '') : besti,
+           (1, 'loss') : 1000*loss[besti]}
+    for (i,s), v in jax.tree.map(lambda e: 1000*e[besti], losses).items():
+        res[(2+i,s)] = v
+    res[(2+len(losses), 'squared l2 norm')] = bloss
+    res[(3+len(losses), 'l-oo norm')] = maxabs
+    res[(4+len(losses), 'worst batch loss')] = 1000*worst
     return res
 
 # A simple update loop.
@@ -172,8 +182,8 @@ for it in range(numit):
         sts = stats(opt_state,loss,full_dec,losses)
         elapsed = time.time() - startt
         print(f'{it}: time elapsed {elapsed}, Kips {it*batch / (1000*elapsed) }')
-        for r in sts:
-            print(r)
+        for (_,desc), v in sorted(sts.items()):
+            print(desc.rjust(25), v)
     else:
         del loss, full_dec, losses
         
