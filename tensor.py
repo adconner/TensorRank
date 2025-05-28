@@ -20,13 +20,13 @@ import time
 # )
 
 
-numit = 10000
+numit = 3000
 batch = 10000
 printevery = 100
-cx = True
-# m,n,l,r = 2,2,2,7
+cx = False
+m,n,l,r = 2,2,2,7
 # m,n,l,r = 3,3,3,23
-m,n,l,r = 4,4,4,48
+# m,n,l,r = 4,4,4,48
 
 def matrixmult(m,n,l):
     T=np.zeros((m*n,n*l,l*m))
@@ -79,7 +79,7 @@ def basic_loss_function_elim(T):
     rs = residual_function_elim(T)
     return lambda dec: jnp.sum(optax.l2_loss(jnp.abs(rs(dec)[0][0])))
     
-cl_bound = 1
+cl_bound = 2
 def clipped(x):
     if cx:
         return jnp.clip(jnp.real(x),min=-cl_bound,max=cl_bound) + jnp.clip(jnp.imag(x),min=-cl_bound,max=cl_bound) * 1j
@@ -87,33 +87,35 @@ def clipped(x):
         return jnp.clip(x,min=-cl_bound,max=cl_bound)
     
 def loss_function(T):
-    rs = residual_function_elim(T)
-    # rs = residual_function(T)
+    # rs = residual_function_elim(T)
+    rs = residual_function(T)
     # rs = residual_function_fp(T)
     def loss_fn(dec,it,rng):
         progress = it / numit
         r,full_dec = rs(dec)
-        base_loss = jax.tree.reduce(jnp.add,jax.tree.map(lambda e: jnp.mean(optax.l2_loss(jnp.abs(e))), r))
+        base_loss = jax.tree.reduce(jnp.add,jax.tree.map(lambda e: 5*jnp.mean(optax.l2_loss(jnp.abs(e))), r))
         regularization_loss = 0.0
-        discretization_zero_loss = 0.0
+        descretization_loss = 0.0
         for f in full_dec:
-            regularization_loss += 0.02 * jnp.where(progress < 1/2, 0.1 ** (progress*4), 0) * jnp.mean(optax.l2_loss(jnp.abs(f)))
-            # regularization_loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
-            # discretization_zero_loss += 0.003 * jnp.mean(jnp.abs(f))
-            # discretization_zero_loss += 0.003 * jnp.mean(jnp.abs(f - jnp.round(f)))
+            regularization_loss += 0.02 * jnp.where(progress < 1/3, 0.1 ** (progress*6), 0) * jnp.mean(optax.l2_loss(jnp.abs(f)))
+            regularization_loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
+            # descretization_loss += 0.003 * jnp.mean(jnp.abs(f))
+            # descretization_loss += ((1-jnp.cos(jnp.pi*progress))/2) * 0.03 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
+            # descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.03 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
+            descretization_loss += ((1-jnp.cos(jnp.pi*progress))/2) * 0.04 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
             # loss += 0.03 * ((1-jnp.cos(jnp.pi*progress))/2) * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
             # loss += 0.01 * ((1-jnp.cos(jnp.pi*progress))/2)**2 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
             # loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
-        loss = base_loss + regularization_loss + discretization_zero_loss
+        loss = base_loss + regularization_loss + descretization_loss
         return loss,(full_dec, { (0,'base_loss') : base_loss, 
                                 (1,'regularization_loss') : regularization_loss, 
-                                (2,'discretization_zero_loss') : discretization_zero_loss })
+                                (2,'descretization_loss') : descretization_loss })
     return loss_fn
 
 def init(rng):
     dec = []
-    # for td in T.shape:
-    for td in T.shape[:-1]:
+    for td in T.shape:
+    # for td in T.shape[:-1]:
         rng, rngcur = jax.random.split(rng)
         if cx:
             dec.append(jax.random.normal(rng, (td, r), jnp.complex64))
@@ -187,33 +189,37 @@ for it in range(numit):
     else:
         del loss, full_dec, losses
         
-# startt = time.time()
-# numrefine=10
-# numrefine = min(numrefine,batch)
-# loss = basic_loss_fn(dec)
-# besti = jnp.argpartition(loss,numrefine-1)[:numrefine]
-# decbest = jax.tree.map(lambda x: x[besti],dec)
-# # @jax.jit
-# # @eqx.filter_jit
-# @jax.vmap
-# def refine(dec):
-#     # lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4,verbose=frozenset(['loss']))
-#     lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4)
-#     # lm = optx.Newton(rtol=1e-3, atol=1e-4, cauchy_termination=False)
-#     rs_base = residual_function(T)
-#     # # lm = optx.Newton(rtol=1e-3, atol=1e-4, linear_solver=lx.NormalCG(rtol=1e-2,atol=1e-3), cauchy_termination=False)
-#     # lm = optx.Newton(rtol=1e-3, atol=1e-4, linear_solver=lx.AutoLinearSolver(well_posed=True), cauchy_termination=False)
-#     # rs_base = residual_function_fp(T)
-#     @jax.jit
-#     def rs_fn(dec, unused):
-#         rs = rs_base(dec)
-#         # for f in dec:
-#         #     rs.append(0.1 * (f - jnp.round(f*2)/2))
-#         #     # rs.append(0.1 * (f - jnp.round(f)))
-#         #     rs.append(0.5 * (f - clipped(f)))
-#         return rs
-#     # return optx.root_find(rs_fn, lm, dec, throw=False).value
-#     return optx.least_squares(rs_fn, lm, dec, throw=False).value
-# dec_refine = refine(decbest)
-# print( basic_loss_fn(dec_refine) )
-# print(f'time elapsed : {time.time() - startt}')
+startt = time.time()
+numrefine=500
+numrefine = min(numrefine,batch)
+loss = basic_loss_fn(dec)
+besti = jnp.argpartition(loss,numrefine-1)[:numrefine]
+decbest = jax.tree.map(lambda x: x[besti],dec)
+@jax.jit
+@jax.vmap
+def refine(dec):
+    # lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4,verbose=frozenset(['loss']))
+    lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4)
+    # lm = optx.Newton(rtol=1e-3, atol=1e-4, cauchy_termination=False)
+    rs_base = residual_function(T)
+    # # lm = optx.Newton(rtol=1e-3, atol=1e-4, linear_solver=lx.NormalCG(rtol=1e-2,atol=1e-3), cauchy_termination=False)
+    # lm = optx.Newton(rtol=1e-3, atol=1e-4, linear_solver=lx.AutoLinearSolver(well_posed=True), cauchy_termination=False)
+    # rs_base = residual_function_fp(T)
+    def rs_fn(dec, unused):
+        rs, fdec = rs_base(dec)
+        rs = [rs]
+        for f in dec:
+            rs.append(0.5 * (f - jnp.round(f)))
+            # rs.append(0.5 * (f - jnp.round(f*2)/2))
+        #     # rs.append(0.1 * (f - jnp.round(f)))
+        #     rs.append(0.5 * (f - clipped(f)))
+        return rs
+    # return optx.root_find(rs_fn, lm, dec, throw=False).value
+    return optx.least_squares(rs_fn, lm, dec, throw=False).value
+dec_refine = refine(decbest)
+bloss = basic_loss_fn(dec_refine) 
+besti = jnp.argpartition(bloss,9)[:10]
+print( bloss[besti] )
+print( basic_loss_fn(jax.tree.map(lambda x: jnp.round(x[besti]),dec_refine)) )
+# print( basic_loss_fn(jax.tree.map(lambda x: jnp.round(x[besti]*2)/2,dec_refine)) )
+print(f'time elapsed : {time.time() - startt}')
