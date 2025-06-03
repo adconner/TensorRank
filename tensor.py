@@ -102,8 +102,8 @@ def loss_function(T):
             regularization_loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
             # descretization_loss += 0.003 * jnp.mean(jnp.abs(f))
             # descretization_loss += ((1-jnp.cos(jnp.pi*progress))/2) * 0.03 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
-            # descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.03 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
-            descretization_loss += ((1-jnp.cos(jnp.pi*progress))/2) * 0.04 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
+            descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
+            # descretization_loss += ((1-jnp.cos(jnp.pi*progress))/2) * 0.04 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
             # loss += 0.03 * ((1-jnp.cos(jnp.pi*progress))/2) * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
             # loss += 0.01 * ((1-jnp.cos(jnp.pi*progress))/2)**2 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
             # loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
@@ -137,7 +137,7 @@ rng = jax.random.PRNGKey(np.random.randint(2**32))
 rng, rngc = jax.random.split(rng)
 dec = jax.vmap(init)(jax.random.split(rngc,batch))
 
-start_learning_rate = 1e-1
+start_learning_rate = 0.1
 optimizer = optax.adam(start_learning_rate)
 # optimizer = optax.adamw(start_learning_rate)
 # optimizer = optax.lbfgs(start_learning_rate)
