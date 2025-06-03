@@ -190,14 +190,20 @@ for it in range(numit):
     else:
         del loss, full_dec, losses
         
+bloss_round = basic_loss_fn(jax.tree.map(lambda x: jnp.round(x),dec))
+# bloss_round = basic_loss_fn(jax.tree.map(lambda x: jnp.round(x*2)/2,dec))
+successes = jnp.count_nonzero(bloss_round == 0)
+print( f"{successes} solves out of {batch}, {successes/batch*100:.2f}%" )
+
 startt = time.time()
-numrefine=batch
+refine_batch = 1000
+numrefine = batch
 numrefine = min(numrefine,batch)
 loss = basic_loss_fn(dec)
 besti = jnp.argpartition(loss,numrefine-1)[:numrefine]
 decbest = jax.tree.map(lambda x: x[besti],dec)
 @jax.jit
-@jax.vmap
+# @jax.vmap
 def refine(dec):
     # lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4,verbose=frozenset(['loss']))
     lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4,linear_solver=lx.NormalCholesky())
@@ -217,7 +223,8 @@ def refine(dec):
         return rs
     # return optx.root_find(rs_fn, lm, dec, throw=False).value
     return optx.least_squares(rs_fn, lm, dec, throw=False).value
-dec_refine = refine(decbest)
+# dec_refine = refine(decbest)
+dec_refine = jax.lax.map(refine, decbest, batch_size=refine_batch)
 bloss = basic_loss_fn(dec_refine) 
 besti = jnp.argpartition(bloss,9)[:10]
 print( bloss[besti] )
