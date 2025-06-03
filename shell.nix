@@ -1,13 +1,18 @@
-let pkgs = import <nixpkgs> {}; 
+let 
+  pkgs = import (fetchTarball "https://github.com/NixOS/nixpkgs/tarball/nixos-25.05") {};
+# let pkgs = import <nixpkgs> {}; 
 in
 pkgs.mkShell {
   buildInputs = with pkgs.python3Packages; [
-    ipython
+    # tensorflow
+    # ipython
     jax
     jaxlib
     jax-cuda12-plugin
     optax
-    optimistix
+    # optimistix
+    venvShellHook
   ];
+  venvDir = ".venv";
 }
   
