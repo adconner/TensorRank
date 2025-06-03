@@ -62,6 +62,7 @@ def residual_function_elim(T):
         r = dec[0].shape[1]
         a,b,c = T.shape
         C = jnp.einsum('il,jl->ijl', dec[0],dec[1]).reshape(a*b,r)
+        # solve = jax.vmap(lambda A,B: lx.linear_solve(lx.MatrixLinearOperator(A), B, lx.NormalCholesky()).value, [None,1], 1)
         solve = jax.vmap(lambda A,B: lx.linear_solve(lx.MatrixLinearOperator(A.conj().T @ A, lx.positive_semidefinite_tag), 
                                                      A.conj().T @ B, lx.AutoLinearSolver(well_posed=True)).value, [None,1], 1)
         # solve = jax.vmap(lambda A,B: lx.linear_solve(lx.MatrixLinearOperator(A), B, lx.SVD()).value, [None,1], 1)
@@ -183,14 +184,14 @@ for it in range(numit):
     if it % printevery == printevery-1:
         sts = stats(opt_state,loss,full_dec,losses)
         elapsed = time.time() - startt
-        print(f'{it}: time elapsed {elapsed}, Kips {it*batch / (1000*elapsed) }')
+        print(f'{it}: {elapsed:.3f}s elapsed, {it*batch / (1000*elapsed):.0f}K iteratons/s')
         for (_,desc), v in sorted(sts.items()):
             print(desc.rjust(25), v)
     else:
         del loss, full_dec, losses
         
 startt = time.time()
-numrefine=500
+numrefine=batch
 numrefine = min(numrefine,batch)
 loss = basic_loss_fn(dec)
 besti = jnp.argpartition(loss,numrefine-1)[:numrefine]
@@ -199,7 +200,7 @@ decbest = jax.tree.map(lambda x: x[besti],dec)
 @jax.vmap
 def refine(dec):
     # lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4,verbose=frozenset(['loss']))
-    lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4)
+    lm = optx.LevenbergMarquardt(rtol=1e-3,atol=1e-4,linear_solver=lx.NormalCholesky())
     # lm = optx.Newton(rtol=1e-3, atol=1e-4, cauchy_termination=False)
     rs_base = residual_function(T)
     # # lm = optx.Newton(rtol=1e-3, atol=1e-4, linear_solver=lx.NormalCG(rtol=1e-2,atol=1e-3), cauchy_termination=False)
@@ -220,6 +221,10 @@ dec_refine = refine(decbest)
 bloss = basic_loss_fn(dec_refine) 
 besti = jnp.argpartition(bloss,9)[:10]
 print( bloss[besti] )
-print( basic_loss_fn(jax.tree.map(lambda x: jnp.round(x[besti]),dec_refine)) )
-# print( basic_loss_fn(jax.tree.map(lambda x: jnp.round(x[besti]*2)/2,dec_refine)) )
-print(f'time elapsed : {time.time() - startt}')
+bloss_round = basic_loss_fn(jax.tree.map(lambda x: jnp.round(x),dec_refine))
+# bloss_round = basic_loss_fn(jax.tree.map(lambda x: jnp.round(x*2)/2,dec_refine))
+print( bloss_round[besti] )
+successes = jnp.count_nonzero(bloss_round == 0)
+print( f"{successes} solves out of {numrefine}, {successes/numrefine*100:.2f}%" )
+time_elapsed = time.time() - startt
+print(f'{time_elapsed:.3f}s elapsed, {numrefine/time_elapsed:.3f} solves/s')
