@@ -20,9 +20,9 @@ import time
 # )
 
 numit = 3000
-batch = 10
+batch = 10000
 printevery = 100
-cx = False
+cx = True
 m,n,l,r = 2,2,2,7
 # m,n,l,r = 3,3,3,23
 # m,n,l,r = 4,4,4,48
@@ -119,12 +119,12 @@ def loss_function(T,perturb=False):
         # r = rsp(dec,rng)
         # full_dec = dec
         
-        base_loss_fn = lambda dec: jax.tree.reduce(jnp.add,jax.tree.map(
-            lambda e: 5*jnp.mean(optax.l2_loss(jnp.abs(e))), rs(jax.tree.map(jnp.round,dec))[0]))
-        base_loss_p = optax.perturbations.make_perturbed_fun(base_loss_fn, 
-                                         num_samples=100000,
-                                         sigma=0.3, 
-                                         noise=optax.perturbations.Normal())(dec,rng)
+        # base_loss_fn = lambda dec: jax.tree.reduce(jnp.add,jax.tree.map(
+        #     lambda e: 5*jnp.mean(optax.l2_loss(jnp.abs(e))), rs(jax.tree.map(jnp.round,dec))[0]))
+        # base_loss_p = optax.perturbations.make_perturbed_fun(base_loss_fn, 
+        #                                  num_samples=100000,
+        #                                  sigma=0.3, 
+        #                                  noise=optax.perturbations.Normal())(dec,rng)
         
         base_loss = jax.tree.reduce(jnp.add,jax.tree.map(lambda e: 5*jnp.mean(optax.l2_loss(jnp.abs(e))), r))
         if not perturb:
@@ -137,6 +137,7 @@ def loss_function(T,perturb=False):
             regularization_loss += 0.02 * jnp.where(progress < 1/3, 0.1 ** (progress*6), 0) * jnp.mean(optax.l2_loss(jnp.abs(f)))
             regularization_loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
             descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
+            descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
             
             # descretization_loss += 0.003 * jnp.mean(jnp.abs(f))
             # descretization_loss += ((1-jnp.cos(jnp.pi*progress))/2) * 0.03 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
@@ -208,9 +209,11 @@ for it in range(numit):
     else:
         del loss, full_dec, losses
         
-bloss_round = basic_loss_fn(jax.tree.map(lambda x: jnp.round(x),dec))
-# bloss_round = basic_loss_fn(jax.tree.map(lambda x: jnp.round(x*2)/2,dec))
+# dec_round = jax.tree.map(lambda x: jnp.round(x),dec)
+dec_round = jax.tree.map(lambda x: jnp.round(x*2)/2,dec)
+bloss_round = basic_loss_fn(dec_round)
 successes = jnp.count_nonzero(bloss_round == 0)
+sols = jax.tree.map(lambda x: x[bloss_round == 0], dec_round)
 print( f"{successes} solves out of {batch}, {successes/batch*100:.2f}%" )
 
 # startt = time.time()
