@@ -22,10 +22,12 @@ import time
 numit = 3000
 batch = 10000
 printevery = 100
-cx = True
+cx = False
 m,n,l,r = 2,2,2,7
 # m,n,l,r = 3,3,3,23
 # m,n,l,r = 4,4,4,48
+
+DEC2 = False
 
 def matrixmult(m,n,l):
     T=np.zeros((m*n,n*l,l*m))
@@ -39,8 +41,7 @@ if cx:
 
 def init(rng):
     dec = []
-    for td in T.shape:
-    # for td in T.shape[:-1]:
+    for td in T.shape[:-1] if DEC2 else T.shape:
         rng, rngcur = jax.random.split(rng)
         if cx:
             dec.append(jax.random.normal(rng, (td, r), jnp.complex64))
@@ -83,7 +84,7 @@ def residual_function_elim(T):
         r = dec[0].shape[1]
         a,b,c = T.shape
         C = jnp.einsum('il,jl->ijl', dec[0],dec[1]).reshape(a*b,r)
-        # solve = jax.vmap(lambda A,B: lx.linear_solve(lx.MatrixLinearOperator(A), B, lx.NormalCholesky()).value, [None,1], 1)
+        # solve = jax.vmap(lambda A,B: lx.linear_solve(lx.MatrixLinearOperator(A), B, lx.Normal(lx.Cholesky())).value, [None,1], 1)
         solve = jax.vmap(lambda A,B: lx.linear_solve(lx.MatrixLinearOperator(A.conj().T @ A, lx.positive_semidefinite_tag), 
                                                      A.conj().T @ B, lx.AutoLinearSolver(well_posed=True)).value, [None,1], 1)
         # solve = jax.vmap(lambda A,B: lx.linear_solve(lx.MatrixLinearOperator(A), B, lx.SVD()).value, [None,1], 1)
@@ -108,27 +109,18 @@ def clipped(x):
     else:
         return jnp.clip(x,min=-cl_bound,max=cl_bound)
 
-def loss_function(T,perturb=False):
-    # rs = residual_function_elim(T)
-    rs = residual_function(T)
-    # rs = residual_function_fp(T)
+def loss_function(T):
+    if DEC2:
+        rs = residual_function_elim(T)
+    else:
+        # rs = residual_function_fp(T)
+        rs = residual_function(T)
     
     def loss_fn(dec,it,rng):
         progress = it / numit
         r,full_dec = rs(dec)
-        # r = rsp(dec,rng)
-        # full_dec = dec
-        
-        # base_loss_fn = lambda dec: jax.tree.reduce(jnp.add,jax.tree.map(
-        #     lambda e: 5*jnp.mean(optax.l2_loss(jnp.abs(e))), rs(jax.tree.map(jnp.round,dec))[0]))
-        # base_loss_p = optax.perturbations.make_perturbed_fun(base_loss_fn, 
-        #                                  num_samples=100000,
-        #                                  sigma=0.3, 
-        #                                  noise=optax.perturbations.Normal())(dec,rng)
         
         base_loss = jax.tree.reduce(jnp.add,jax.tree.map(lambda e: 5*jnp.mean(optax.l2_loss(jnp.abs(e))), r))
-        if not perturb:
-            base_loss_p = base_loss
         regularization_loss = 0.0
         descretization_loss = 0.0
         for f in full_dec:
@@ -146,9 +138,8 @@ def loss_function(T,perturb=False):
             # loss += 0.01 * ((1-jnp.cos(jnp.pi*progress))/2)**2 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
             # loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
             
-        loss = base_loss_p + regularization_loss + descretization_loss
-        return loss,(full_dec, { (-1,'base_loss_p') : base_loss_p, 
-                                (0,'base_loss') : base_loss, 
+        loss = base_loss + regularization_loss + descretization_loss
+        return loss,(full_dec, { (0,'base_loss') : base_loss, 
                                 (1,'regularization_loss') : regularization_loss, 
                                 (2,'descretization_loss') : descretization_loss })
     
@@ -169,10 +160,6 @@ def update_function(dec, opt_state, it, rng):
     (loss, (full_dec, losses)), grads = jax.value_and_grad(loss_fn,has_aux=True)(dec,it,rng)
     if cx:
         grads = jax.tree.map(jnp.conj, grads)
-    # grads = jax.tree.map(jax.add, grads, 
-    #                      jax.random.normal(rng, jax.tree.structure(
-    # jax.random.normal(rng, jax.tree.structure(grads)
-    # grads = jax.tree.map(lambda e: e + 0.02*jax.random.normal(rng, e.shape, e.dtype),grads)
     updates, opt_state = optimizer.update(grads, opt_state, dec, value = loss, grad = grads, value_fn = lambda x: loss_fn(x,it,rng)[0])
     dec = optax.apply_updates(dec, updates)
     return dec, opt_state, loss, full_dec, losses
@@ -200,7 +187,7 @@ for it in range(numit):
         startt = time.time()
     rng, rngcur = jax.random.split(rng)
     dec, opt_state, loss, full_dec, losses = update_function(dec, opt_state, it, jax.random.split(rngcur,batch))
-    if it % printevery == printevery-1:
+    if it % printevery == printevery-1 or it == numit-1:
         sts = stats(opt_state,loss,full_dec,losses)
         elapsed = time.time() - startt
         print(f'{it}: {elapsed:.3f}s elapsed, {it*batch / (1000*elapsed):.0f}K iteratons/s')
@@ -209,8 +196,8 @@ for it in range(numit):
     else:
         del loss, full_dec, losses
         
-# dec_round = jax.tree.map(lambda x: jnp.round(x),dec)
-dec_round = jax.tree.map(lambda x: jnp.round(x*2)/2,dec)
+# dec_round = jax.tree.map(lambda x: jnp.round(x),full_dec)
+dec_round = jax.tree.map(lambda x: jnp.round(x*2)/2,full_dec)
 bloss_round = basic_loss_fn(dec_round)
 successes = jnp.count_nonzero(bloss_round == 0)
 sols = jax.tree.map(lambda x: x[bloss_round == 0], dec_round)
