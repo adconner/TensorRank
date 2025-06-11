@@ -8,20 +8,11 @@ import lineax as lx
 import equinox as eqx
 from itertools import *
 import time
-
-
-# import os
-# os.environ["XLA_FLAGS"] = (
-#     "--xla_gpu_enable_triton_softmax_fusion=true "
-#     "--xla_gpu_triton_gemm_any=false "
-#     "--xla_gpu_enable_async_collectives=true "
-#     "--xla_gpu_enable_latency_hiding_scheduler=true "
-#     "--xla_gpu_enable_highest_priority_async_stream=true "
-# )
+import mpax
 
 numit = 3000
-batch = 10000
-printevery = 100
+batch = 10
+printevery = 10
 cx = False
 m,n,l,r = 2,2,2,7
 # m,n,l,r = 3,3,3,23
@@ -34,6 +25,23 @@ def matrixmult(m,n,l):
     for i,j,k in product(range(m),range(n),range(l)):
         T[i*n+j, j*l+k, k*m+i] = 1
     return T
+    
+def tight_weight(T):
+    from sage.all import matrix
+    a,b,c = T.shape
+    I,J,K = np.nonzero(T)
+    eqs = []
+    for i,j,k in zip(I,J,K):
+        eqs.append([1 if e == i else 0 for e in range(a)] +\
+            [1 if e == j else 0 for e in range(b)] +\
+            [1 if e == k else 0 for e in range(c)])
+    tights = matrix(ZZ,eqs).right_kernel_matrix(basis='LLL')
+    # tights = np.array(tights[:,:a]), np.array(tights[:,a:a+b]), np.array(tights[:,a+b:])
+    # return tights
+    tights = [(t[:a],t[a:a+b],t[a+b:]) for t in tights]
+    M = matrix([[ta[i]+tb[j]+tc[k] for i,j,k in
+        product(range(a),range(b),range(c))] for ta,tb,tc in tights])
+    return np.array(M).reshape(len(tights),a,b,c)
 
 T = matrixmult(m,n,l)
 if cx:
@@ -61,6 +69,33 @@ def residual_function(T):
         S = jnp.einsum('il,jl,kl->ijk', *dec)
         return (S-T,),dec
     return rs
+
+def loss_function_tight(T):
+    tight = tight_weight(T)
+    tight = tight.reshape(tight.shape[0],-1).transpose()
+    # want 
+    # min x_n
+    # -tight x + rs.ravel() <= x_n
+    # equiv
+    # [tight 1] [x ]  >= rs.ravel()
+    #           [x_n]
+    G = jnp.hstack((tight, jnp.ones((tight.shape[0],1))))
+    c = jnp.hstack((jnp.zeros(tight.shape[1]), jnp.array([1.0])))
+    A = jnp.zeros((0, tight.shape[1]+1))
+    b = jnp.zeros((0,))
+    u = jnp.ones(tight.shape[1]+1)*jnp.inf
+    l = -u
+    solver = mpax.r2HPDHG()
+    def loss_fn(dec):
+        S = jnp.einsum('il,jl,kl->ijk', *dec)
+        rs = jnp.log(jnp.abs(S-T))
+        h = rs.ravel()
+        lp = mpax.create_lp(c,A,b,G,h,l,u)
+        result = solver.optimize(lp)
+        return result.primal_objective
+    # return lambda key, dec: loss_fn(dec)
+    return optax.perturbations.make_perturbed_fun(loss_fn, 100, 0.1, optax.perturbations.Normal())
+    # return lambda key,dec: jnp.exp(optax.perturbations.make_perturbed_fun(loss_fn, 100, 0.1, optax.perturbations.Normal())(key,dec))
 
 def residual_function_fp(T):
     def rs(dec):
@@ -110,14 +145,13 @@ def clipped(x):
         return jnp.clip(x,min=-cl_bound,max=cl_bound)
 
 def loss_function(T):
-    if DEC2:
-        rs = residual_function_elim(T)
-    else:
-        # rs = residual_function_fp(T)
-        rs = residual_function(T)
+    lfn = loss_function_tight(T)
     
     def loss_fn(dec,it,rng):
         progress = it / numit
+        loss = lfn(rng,dec)
+        return loss,(dec,{})
+    
         r,full_dec = rs(dec)
         
         base_loss = jax.tree.reduce(jnp.add,jax.tree.map(lambda e: 5*jnp.mean(optax.l2_loss(jnp.abs(e))), r))

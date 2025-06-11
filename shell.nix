@@ -9,11 +9,12 @@ pkgs.mkShell {
     jax
     jaxlib
     jax-cuda12-plugin
-    optax
+    # optax
     # optimistix
     venvShellHook
   ] ++ (with pkgs; [
     jujutsu
+    sage
   ]);
   venvDir = ".venv";
 }
