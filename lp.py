@@ -20,4 +20,5 @@ def sol(t = 0):
     lp = mpax.create_lp(c, A, b, G, h, l, u)
     solver = mpax.r2HPDHG(eps_abs=1e-4, eps_rel=1e-4, verbose=False)
     result = solver.optimize(lp)
+    return result
     return result.primal_objective
