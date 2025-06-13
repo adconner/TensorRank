@@ -11,8 +11,8 @@ import time
 import mpax
 import scipy
 
-numit = 3000
-batch = 1000
+numit = 10000
+batch = 10000
 printevery = 100
 cx = False
 m,n,l,r = 2,2,2,7
@@ -66,9 +66,10 @@ dec = jax.vmap(init)(jax.random.split(rngc,batch))
 dec1 = jax.tree.map(lambda e: e[0], dec)
 
 def basic_loss_function(T):
-    def lf(dec):
+    def lf(dec,keep_pos=jnp.array(True)):
         S = jnp.einsum('il,jl,kl->ijk', *dec)
-        return 2*jnp.sum(optax.l2_loss(jnp.abs(S-T)))
+        rs = jnp.where(keep_pos,(S-T).ravel(),0.0)
+        return 2*jnp.sum(optax.l2_loss(jnp.abs(rs)))
     return lf
 
 cl_bound = 2
@@ -100,20 +101,20 @@ def loss_function(T):
     u = jnp.ones(tight.shape[1]+1)*jnp.inf
     l = -u
     solver = mpax.r2HPDHG(iteration_limit=100, feasibility_polishing=False)
-    def get_filter_pos(dec):
+    def get_keep_pos(dec):
         rs = rs_fun(dec)
         rslog = jnp.log(jnp.abs(rs)+1e-15)
         h = rslog
         lp = mpax.create_lp(c,A,b,G,h,l,u)
         result = solver.optimize(lp)
-        filter_pos = tight @ result.primal_solution[:-1]
-        return filter_pos
+        keep_pos = tight @ result.primal_solution[:-1]
+        return keep_pos <= 1e-13
     
-    def loss_fn(dec,it,rng,filter_pos = 0.0):
+    def loss_fn(dec,it,rng,keep_pos = 0.0):
         progress = it / numit
         r = rs_fun(dec)
         full_dec = dec
-        r = jnp.where(filter_pos > 1e-13, 0.0, r)
+        r = jnp.where(keep_pos, r, 0.0)
         
         base_loss = jax.tree.reduce(jnp.add,jax.tree.map(lambda e: 5*jnp.mean(optax.l2_loss(jnp.abs(e))), r))
         regularization_loss = 0.0
@@ -138,39 +139,39 @@ def loss_function(T):
                                 (1,'regularization_loss') : regularization_loss, 
                                 (2,'descretization_loss') : descretization_loss })
     
-    return loss_fn, get_filter_pos
+    return loss_fn, get_keep_pos
 
-loss_fn, get_filter_pos = loss_function(T)
-basic_loss_fn = jax.vmap(basic_loss_function(T))
-get_filter_pos = jax.jit(jax.vmap(get_filter_pos))
+loss_fn, get_keep_pos = loss_function(T)
+basic_loss_fn = jax.jit(jax.vmap(basic_loss_function(T),in_axes=[0,0]))
+get_keep_pos = jax.jit(jax.vmap(get_keep_pos))
 
 start_learning_rate = 0.1
 optimizer = optax.adam(start_learning_rate)
 # optimizer = optax.adamw(start_learning_rate)
 # optimizer = optax.lbfgs(start_learning_rate)
 opt_state = jax.vmap(optimizer.init)(dec)
-filter_pos = get_filter_pos(dec)
+keep_pos = get_keep_pos(dec)
 
 @functools.partial(jax.jit,donate_argnums=[0,1])
 @functools.partial(jax.vmap, in_axes=[0,0,0,None,0])
-def update_function(dec, opt_state, filter_pos, it, rng):
-    (loss, (full_dec, losses)), grads = jax.value_and_grad(loss_fn,has_aux=True)(dec,it,rng,filter_pos)
+def update_function(dec, opt_state, keep_pos, it, rng):
+    (loss, (full_dec, losses)), grads = jax.value_and_grad(loss_fn,has_aux=True)(dec,it,rng,keep_pos)
     if cx:
         grads = jax.tree.map(jnp.conj, grads)
     updates, opt_state = optimizer.update(grads, opt_state, dec, value = loss, grad = grads, value_fn = 
-                                          lambda x: loss_fn(x,it,rng,filter_pos)[0])
+                                          lambda x: loss_fn(x,it,rng,keep_pos)[0])
     dec = optax.apply_updates(dec, updates)
     return dec, opt_state, loss, full_dec, losses
 
 @jax.jit
-def stats(opt_state, loss, full_dec, losses, filter_pos):
+def stats(opt_state, loss, full_dec, losses, keep_pos):
     besti = jnp.argpartition(loss,4)[:5]
     besti = besti[jnp.argsort(loss[besti])]
     # besti = jnp.sort(besti)
     rfd = jax.tree.map(lambda e: e[besti], full_dec)
-    bloss = basic_loss_fn(rfd)
+    bloss = basic_loss_fn(rfd,keep_pos[besti])
     maxabs = jax.vmap(lambda dec: jax.tree.reduce(jnp.maximum,jax.tree.map(lambda e: jnp.max(jnp.abs(e)), dec)))(rfd)
-    neqs = jnp.count_nonzero(filter_pos[besti], axis=1)
+    neqs = jnp.count_nonzero(keep_pos[besti], axis=1)
     worst = jnp.max(loss)
     res = { (0, '') : besti,
            (1, 'loss') : 1000*loss[besti]}
@@ -186,10 +187,10 @@ for it in range(numit):
     if it == 1:
         startt = time.time()
     rng, rngcur = jax.random.split(rng)
-    dec, opt_state, loss, full_dec, losses = update_function(dec, opt_state, filter_pos, it, jax.random.split(rngcur,batch))
+    dec, opt_state, loss, full_dec, losses = update_function(dec, opt_state, keep_pos, it, jax.random.split(rngcur,batch))
     if it % printevery == printevery-1 or it == numit-1:
-        sts = stats(opt_state,loss,full_dec,losses,filter_pos)
-        filter_pos = get_filter_pos(dec)
+        sts = stats(opt_state,loss,full_dec,losses,keep_pos)
+        keep_pos = get_keep_pos(dec)
         elapsed = time.time() - startt
         print(f'{it}: {elapsed:.3f}s elapsed, {it*batch / (1000*elapsed):.0f}K iteratons/s')
         for (_,desc), v in sorted(sts.items()):
@@ -199,7 +200,7 @@ for it in range(numit):
         
 # dec_round = jax.tree.map(lambda x: jnp.round(x),full_dec)
 dec_round = jax.tree.map(lambda x: jnp.round(x*2)/2,full_dec)
-bloss_round = basic_loss_fn(dec_round)
+bloss_round = basic_loss_fn(dec_round,keep_pos)
 successes = jnp.count_nonzero(bloss_round == 0)
 sols = jax.tree.map(lambda x: x[bloss_round == 0], dec_round)
 print( f"{successes} solves out of {batch}, {successes/batch*100:.2f}%" )
