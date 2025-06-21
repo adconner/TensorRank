@@ -1,21 +1,14 @@
 let 
-  # pkgs = import (fetchTarball "https://github.com/NixOS/nixpkgs/tarball/nixos-25.05") {};
-  pkgs = import <nixpkgs> {}; 
+  pkgs = import (fetchTarball "https://github.com/NixOS/nixpkgs/tarball/nixos-unstable") {};
 in
 pkgs.mkShell {
   buildInputs = with pkgs.python3Packages; [
-    # tensorflow
-    # ipython
     jax
     jaxlib
-    jax-cuda12-plugin
-    # optax
-    # optimistix
-    venvShellHook
+    optax
+    # venvShellHook
   ] ++ (with pkgs; [
-    jujutsu
-    sage
   ]);
-  venvDir = ".venv";
+  # venvDir = ".venv";
 }
   
