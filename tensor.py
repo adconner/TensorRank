@@ -7,12 +7,12 @@ from itertools import *
 import time
 import scipy
 
-numit = 10000
-batch = 100
-printevery = 100
+numit = 20000
+batch = 10000
+printevery = 1000
 cx = False
 # m,n,l,r = 2,2,2,7
-m,n,l,r = 3,3,3,20
+m,n,l,r = 3,3,3,21
 # m,n,l,r = 4,4,4,48
 
 print_num = 5
@@ -64,11 +64,12 @@ def basic_loss(dect,temp):
     tightexp = jnp.einsum('i,ijkl->jkl', t, tight)
     influence = jnp.where( temp == 0.0, 
                           jnp.where( tightexp <= 0.0, 1.0, 0.0 ),
+                          # jnp.exp(-tightexp/temp) )
                           jax.nn.sigmoid(-tightexp/temp) )
     E = (S-T) * influence
-    return jnp.mean(optax.l2_loss(E))
+    return jnp.mean(jnp.real(E*E.conj()))
 
-cl_bound = 2
+cl_bound = 1
 def clipped(x):
     if cx:
         return jnp.clip(jnp.real(x),min=-cl_bound,max=cl_bound) + jnp.clip(jnp.imag(x),min=-cl_bound,max=cl_bound) * 1j
@@ -78,8 +79,10 @@ def clipped(x):
 def loss_fn(dect,it,key):
     dec,t = dect
     progress = it / numit
+    # temp = 1.0
     # temp = 0.0
-    # temp = jnp.maximum(0.0,1 - progress)
+    # temp = 1 - 0.8*progress
+    # temp = jnp.where(1 - 1.1*progress >= 0.1, 1-1.1*progress, 0.0)
     temp = jnp.maximum(0.0,1 - 1.1*progress)
     base_loss = basic_loss(dect,temp)
     
@@ -90,8 +93,8 @@ def loss_fn(dect,it,key):
         
         regularization_loss += 0.02 * jnp.where(progress < 1/3, 0.1 ** (progress*6), 0) * jnp.mean(optax.l2_loss(jnp.abs(f)))
         regularization_loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
-        # descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
-        # descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
+        descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
+        descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
         
         # descretization_loss += 0.003 * jnp.mean(jnp.abs(f))
         # descretization_loss += ((1-jnp.cos(jnp.pi*progress))/2) * 0.03 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
@@ -135,6 +138,7 @@ def extra_info(opt_state, loss, dect, info):
     dec, t = dect
     maxabs = jax.vmap(lambda dec: jax.tree.reduce(jnp.maximum,jax.tree.map(lambda e: jnp.max(jnp.abs(e)), dec)))(dec)
     info['maximum coefficient'] = maxabs
+    info['maximum coefficient t'] = jnp.max(jnp.abs(t),axis=1)
     info['worst batch loss'] = jnp.max(loss)*lossmult
     return info
 
@@ -149,6 +153,10 @@ for it in range(numit):
         print(f'{it}: {elapsed:.3f}s elapsed, {it*batch / (1000*elapsed):.0f}K iteratons/s')
         for desc, v in sorted(info.items()):
             print(desc.rjust(25), v)
+        dect = (jax.tree.map(lambda e: np.round(e*2)/2,dect[0]),dect[1])
+
+loss = jax.vmap(basic_loss,in_axes=[0,None])(dect,0.0)
+print(jnp.min(loss))
         
 # # dec_round = jax.tree.map(lambda x: jnp.round(x),full_dec)
 # dec_round = jax.tree.map(lambda x: jnp.round(x*2)/2,full_dec)
