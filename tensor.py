@@ -11,20 +11,36 @@ numit = 20000
 batch = 10000
 printevery = 1000
 cx = False
-# m,n,l,r = 2,2,2,7
-m,n,l,r = 3,3,3,21
-# m,n,l,r = 4,4,4,48
 
 print_num = 5
 print_num = min(print_num,batch)
+
+# m,n,l,r = 2,2,2,7
+# m,n,l,r = 3,3,3,21
+# m,n,l,r = 4,4,4,48
 
 def matrixmult(m,n,l):
     T=np.zeros((m*n,n*l,l*m))
     for i,j,k in product(range(m),range(n),range(l)):
         T[i*n+j, j*l+k, k*m+i] = 1
     return T
+
+def tensor_sum(*Ts):
+    T = np.zeros( tuple(np.sum(np.array([t.shape for t in Ts]),axis=0)) )
+    i,j,k = 0,0,0
+    for t in Ts:
+        a,b,c = t.shape
+        T[i:i+a,j:j+b,k:k+c] = t
+        i += a
+        j += b
+        k += c
+    return T
+
+def schonhage(u,v):
+    return tensor_sum(matrixmult(2*u,v,1), matrixmult(v,2,u), matrixmult(1,u,2*v))
     
-T = matrixmult(m,n,l)
+r = 21
+T = schonhage(2,2)
 if cx:
     T = T.astype('complex64')
     
@@ -49,7 +65,9 @@ tight = tight_weight(T)
 
 def init(key):
     dshape = (tuple(jnp.zeros((d,r),jnp.complex64 if cx else jnp.float32) 
-                    for d in T.shape), jnp.zeros(tight.shape[0]))
+                    for d in T.shape), None)
+    # dshape = (tuple(jnp.zeros((d,r),jnp.complex64 if cx else jnp.float32) 
+    #                 for d in T.shape), jnp.zeros(tight.shape[0]))
     return optax.tree.random_like(key, dshape, jax.random.normal)
 
 key = jax.random.PRNGKey(np.random.randint(2**63))
@@ -60,13 +78,15 @@ dect = jax.vmap(init)(jax.random.split(rngc,batch))
 def basic_loss(dect,temp):
     dec, t = dect
     S = jnp.einsum('il,jl,kl->ijk', *dec)
-    t = jnp.where( temp == 0.0, jax.lax.stop_gradient(t), t)
-    tightexp = jnp.einsum('i,ijkl->jkl', t, tight)
-    influence = jnp.where( temp == 0.0, 
-                          jnp.where( tightexp <= 0.0, 1.0, 0.0 ),
-                          # jnp.exp(-tightexp/temp) )
-                          jax.nn.sigmoid(-tightexp/temp) )
-    E = (S-T) * influence
+    E = S-T
+    if t is not None:
+        t = jnp.where( temp == 0.0, jax.lax.stop_gradient(t), t)
+        tightexp = jnp.einsum('i,ijkl->jkl', t, tight)
+        influence = jnp.where( temp == 0.0, 
+                              jnp.where( tightexp <= 0.0, 1.0, 0.0 ),
+                              jnp.exp(-tightexp/temp) )
+                              # jax.nn.sigmoid(-tightexp/temp) )
+        E = E * influence
     return jnp.mean(jnp.real(E*E.conj()))
 
 cl_bound = 1
@@ -79,11 +99,11 @@ def clipped(x):
 def loss_fn(dect,it,key):
     dec,t = dect
     progress = it / numit
-    # temp = 1.0
+    temp = 1.0
     # temp = 0.0
     # temp = 1 - 0.8*progress
     # temp = jnp.where(1 - 1.1*progress >= 0.1, 1-1.1*progress, 0.0)
-    temp = jnp.maximum(0.0,1 - 1.1*progress)
+    # temp = jnp.maximum(0.0,1 - 1.1*progress)
     base_loss = basic_loss(dect,temp)
     
     regularization_loss = 0.0
@@ -91,10 +111,10 @@ def loss_fn(dect,it,key):
     for f in dec:
         pass
         
-        regularization_loss += 0.02 * jnp.where(progress < 1/3, 0.1 ** (progress*6), 0) * jnp.mean(optax.l2_loss(jnp.abs(f)))
-        regularization_loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
-        descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
-        descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
+        # regularization_loss += 0.02 * jnp.where(progress < 1/3, 0.1 ** (progress*6), 0) * jnp.mean(optax.l2_loss(jnp.abs(f)))
+        # regularization_loss += 0.1 * jnp.mean(optax.l2_loss(jnp.abs(f-clipped(f))))
+        # descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
+        # descretization_loss += ((1-jnp.cos(2*jnp.pi*progress))/2) * 0.02 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f*2)/2)))
         
         # descretization_loss += 0.003 * jnp.mean(jnp.abs(f))
         # descretization_loss += ((1-jnp.cos(jnp.pi*progress))/2) * 0.03 * jnp.mean(optax.l2_loss(jnp.abs(f - jnp.round(f))))
@@ -138,7 +158,8 @@ def extra_info(opt_state, loss, dect, info):
     dec, t = dect
     maxabs = jax.vmap(lambda dec: jax.tree.reduce(jnp.maximum,jax.tree.map(lambda e: jnp.max(jnp.abs(e)), dec)))(dec)
     info['maximum coefficient'] = maxabs
-    info['maximum coefficient t'] = jnp.max(jnp.abs(t),axis=1)
+    if t is not None:
+        info['maximum coefficient t'] = jnp.max(jnp.abs(t),axis=1)
     info['worst batch loss'] = jnp.max(loss)*lossmult
     return info
 
@@ -153,7 +174,7 @@ for it in range(numit):
         print(f'{it}: {elapsed:.3f}s elapsed, {it*batch / (1000*elapsed):.0f}K iteratons/s')
         for desc, v in sorted(info.items()):
             print(desc.rjust(25), v)
-        dect = (jax.tree.map(lambda e: np.round(e*2)/2,dect[0]),dect[1])
+        # dect = (jax.tree.map(lambda e: np.round(e*2)/2,dect[0]),dect[1])
 
 loss = jax.vmap(basic_loss,in_axes=[0,None])(dect,0.0)
 print(jnp.min(loss))
